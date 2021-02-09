@@ -32,6 +32,13 @@ import           Network.Mosquitto.Internal.Types
 import           Network.Mosquitto.Internal.Inline
 import           Foreign.Storable
 
+fromCBool :: CBool -> Bool
+fromCBool (CBool n) = n > 0
+
+toCBool :: Bool -> CBool
+toCBool True = CBool 1
+toCBool False = CBool 0
+
 C.context (C.baseCtx <> C.vecCtx <> C.funCtx <> mosquittoCtx)
 C.include "<stdio.h>"
 C.include "<mosquitto.h>"
@@ -45,7 +52,7 @@ c'MessageToMMessage ptr =
              <$> [C.exp| char * {$(struct mosquitto_message * ptr) -> payload } |]
              <*> fmap fromIntegral [C.exp| int {$(struct mosquitto_message * ptr) -> payloadlen } |])
     <*> (fromIntegral <$> [C.exp| int { $(struct mosquitto_message * ptr)->qos}  |])
-    <*> [C.exp| bool { $(struct mosquitto_message * ptr)->retain}  |]
+    <*> (fromCBool <$> [C.exp| bool { $(struct mosquitto_message * ptr)->retain}  |])
 
 {-# NOINLINE init #-}
 init = [C.exp| int{ mosquitto_lib_init() }|]
@@ -74,10 +81,11 @@ strerror (fromIntegral -> mosq_errno) = peekCString =<< [C.exp| const char * {
 
 newMosquitto :: Bool -> String -> Maybe a -> IO (Mosquitto a)
 newMosquitto clearSession (C8.pack -> userId) _userData = do
+   let clearSession' = toCBool clearSession
    fp <- newForeignPtr_ <$> [C.block|struct mosquitto *{
         struct mosquitto * p =
           mosquitto_new( $bs-cstr:userId
-                       , $(bool clearSession)
+                       , $(bool clearSession')
                        , 0 // (void * ptrUserData)
                        );
         mosquitto_threaded_set(p, true);
@@ -124,14 +132,15 @@ setReconnectDelay
   -> Int         -- ^ initial backoff
   -> Int         -- ^ maximum backoff
   -> IO Int
-setReconnectDelay mosq  exponential (fromIntegral -> reconnectDelay) (fromIntegral -> reconnectDelayMax) =
+setReconnectDelay mosq  exponential (fromIntegral -> reconnectDelay) (fromIntegral -> reconnectDelayMax) = do
+  let exponential' = toCBool exponential
   fmap fromIntegral <$> withPtr mosq $ \pMosq ->
        [C.exp|int{
              mosquitto_reconnect_delay_set
                ( $(struct mosquitto *pMosq)
                , $(int reconnectDelay)
                , $(int reconnectDelayMax)
-               , $(bool exponential)
+               , $(bool exponential')
                )
         }|]
 
@@ -256,14 +265,16 @@ loopForeverExt mosq (fromIntegral -> timeout)  =
         }|]
 
 setTlsInsecure :: Mosquitto a -> Bool -> IO ()
-setTlsInsecure mosq isInsecure =
+setTlsInsecure mosq isInsecure = do
+  let isInsecure' = toCBool isInsecure
   withPtr mosq $ \pMosq ->
        [C.exp|void{
-             mosquitto_tls_insecure_set($(struct mosquitto *pMosq), $(bool isInsecure))
+             mosquitto_tls_insecure_set($(struct mosquitto *pMosq), $(bool isInsecure'))
         }|]
 
 setWill :: Mosquitto a -> Bool -> Int -> String -> S.ByteString -> IO Int
-setWill mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload =
+setWill mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload = do
+  let retain' = toCBool retain
   fmap fromIntegral <$> withPtr mosq $ \pMosq ->
        [C.exp|int{
              mosquitto_will_set
@@ -272,7 +283,7 @@ setWill mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload =
                , $bs-len:payload
                , $bs-ptr:payload
                , $(int qos)
-               , $(bool retain)
+               , $(bool retain')
                )
         }|]
 
@@ -283,7 +294,8 @@ clearWill mosq = fmap fromIntegral <$> withPtr mosq $ \pMosq ->
         }|]
 
 publish :: Mosquitto a -> Bool -> Int -> String -> S.ByteString -> IO ()
-publish mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload =
+publish mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload = do
+  let retain' = toCBool retain
   withPtr mosq $ \pMosq ->
        [C.exp|void{
              mosquitto_publish
@@ -293,7 +305,7 @@ publish mosq retain (fromIntegral -> qos) (C8.pack -> topic) payload =
                , $bs-len:payload
                , $bs-ptr:payload
                , $(int qos)
-               , $(bool retain)
+               , $(bool retain')
                )
         }|]
 
